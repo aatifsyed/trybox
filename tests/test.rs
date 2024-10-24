@@ -52,9 +52,9 @@ fn error_message<T: Send + 'static>(name: &str, file: ExpectFile, x: T) -> Trial
     })
 }
 
-fn fail_alloc<T>(x: T) -> try_box::Error {
+fn fail_alloc<T>(x: T) -> trybox::Error {
     ALLOC.fail();
-    let Err(err) = try_box::or_drop(x) else {
+    let Err(err) = trybox::or_drop(x) else {
         unreachable!("we've made the allocator start failing")
     };
     ALLOC.fallback();

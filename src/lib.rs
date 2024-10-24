@@ -2,8 +2,8 @@
 //!
 //! Basic usage is as follows:
 //! ```
-//! # use try_box::ErrorWith;
-//! match try_box::new(1) {
+//! # use trybox::ErrorWith;
+//! match trybox::new(1) {
 //!     Ok(heaped) => {
 //!         let _: Box<i32> = heaped;
 //!     }
@@ -18,14 +18,14 @@
 //!
 //! ```
 //! fn fallible<T>(x: T) -> Result<Box<T>, Box<dyn std::error::Error + Send + Sync>> {
-//!     Ok(try_box::or_drop(x)?)
+//!     Ok(trybox::or_drop(x)?)
 //! }
 //! ```
 //!
 //! Care has been taken to optimize the size of [`Error`] down to a single usize:
 //! ```
 //! # use std::mem::size_of;
-//! assert_eq!(size_of::<try_box::Error>(), size_of::<usize>());
+//! assert_eq!(size_of::<trybox::Error>(), size_of::<usize>());
 //! ```
 //!
 //! And to provide ergonomic error messages:
@@ -41,7 +41,7 @@
 //!
 //! ```
 //! fn fallible<T>(x: T) -> std::io::Result<Box<T>> {
-//!     Ok(try_box::or_drop(x)?)
+//!     Ok(trybox::or_drop(x)?)
 //! }
 //! ```
 //!
