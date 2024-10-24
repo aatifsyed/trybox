@@ -6,17 +6,17 @@
 //!     Ok(heaped) => {
 //!         let _: Box<i32> = heaped;
 //!     }
-//!     Err(e) => panic!("couldn't allocate {}", e.payload),
-//!                  // access the underlying item ^
+//!     Err(stacked) => {
+//!         let _: i32 = stacked; // failed object is returned on the stack
+//!     },
 //! }
 //! ```
 //!
 //! You may drop the object after allocation failure instead,
-//! which is useful for wrapping in custom error types or casting as trait objects:
+//! choosing to e.g propogate or wrap the error.
 //!
 //! ```
 //! fn fallible<T>(x: T) -> Result<Box<T>, Box<dyn std::error::Error + Send + Sync>> {
-//!         // doesn't contain `payload`, so is always thread-safe etc ^^^^^^^^^^^
 //!     Ok(try_box::or_drop(x)?)
 //! }
 //! ```
@@ -40,7 +40,7 @@
 //!
 //! ```
 //! fn fallible<T>(x: T) -> std::io::Result<Box<T>> {
-//!     Ok(try_box::new(x)?)
+//!     Ok(try_box::or_drop(x)?)
 //! }
 //! ```
 //!
@@ -67,31 +67,24 @@ use core::{any, fmt, mem::MaybeUninit, ptr::NonNull};
 use number_prefix::NumberPrefix;
 
 /// Attempt to move `x` to a heap allocation,
-/// returning `x` wrapped in an [`Error`] on failure.
+/// returning `x` on failure.
 ///
 /// See [crate documentation](mod@self) for more.
 #[inline(always)]
-pub fn new<T>(x: T) -> Result<Box<T>, Error<T>> {
-    match imp(x) {
-        Ok(it) => Ok(it),
-        Err(payload) => Err(Error {
-            payload,
-            info: T::info,
-        }),
-    }
+pub fn new<T>(x: T) -> Result<Box<T>, T> {
+    imp(x)
 }
 
 /// Attempt to move `x` to a heap allocation,
-/// immediately dropping `x` on failure.
-///
-/// The returned [`Error`] is always suitable for propogation.
+/// immediately dropping `x` on failure,
+/// and returning a useful [`Error`].
 ///
 /// See [crate documentation](mod@self) for more.
 #[inline(always)]
 pub fn or_drop<T>(x: T) -> Result<Box<T>, Error> {
     match new(x) {
         Ok(it) => Ok(it),
-        Err(e) => Err(e.without_payload()),
+        Err(_) => Err(Error { info: T::info }),
     }
 }
 
@@ -124,32 +117,27 @@ fn imp<T>(x: T) -> Result<Box<T>, T> {
     }
 }
 
-/// Represents an allocation failure,
-/// possibly containing the [payload](Self::payload) that the allocation failed for.
+/// Represents an allocation failure from [`or_drop`].
 ///
-/// If [`Self::without_payload`] is called,
-/// this is guaranteed to take up a single machine word.
-pub struct Error<T = ()> {
-    pub payload: T,
+/// Designed to be small and propogatable.
+pub struct Error {
     // This could be replaced by `&'static Info` once type_name is a const fn
     info: fn() -> Info,
 }
 
-impl<T: fmt::Debug> fmt::Debug for Error<T> {
+impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Info { layout, name } = self.info();
         let mut d = f.debug_struct("Error");
         d.field("layout", &layout).field("name", &name);
-        if any::type_name::<()>() != any::type_name::<T>() {
-            d.field("payload", &self.payload);
-        }
         d.finish()
     }
 }
 
-impl<T> fmt::Display for Error<T> {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (prefix, precision, num) = match NumberPrefix::binary(self.layout().size() as f64) {
+        let Info { layout, name } = self.info();
+        let (prefix, precision, num) = match NumberPrefix::binary(layout.size() as f64) {
             NumberPrefix::Standalone(num) => ("", 0, num),
             NumberPrefix::Prefixed(pre, num) => {
                 #[cfg(feature = "std")]
@@ -163,15 +151,14 @@ impl<T> fmt::Display for Error<T> {
             }
         };
         f.write_fmt(format_args!(
-            "memory allocation of {num:.precision$} {prefix}bytes (for type {}) failed",
-            self.info().name
+            "memory allocation of {num:.precision$} {prefix}bytes (for type {name}) failed",
         ))
     }
 }
 
 impl core::error::Error for Error {}
 
-impl<T> Error<T> {
+impl Error {
     #[inline(always)]
     fn info(&self) -> Info {
         (self.info)()
@@ -184,35 +171,24 @@ impl<T> Error<T> {
         handle_alloc_error(self.layout())
     }
     /// Get the [`Layout`] that corresponds to the failed allocation.
-    ///
-    /// This is not the same as calling [`Layout::for_value`] on [`Self::payload`]
-    /// because the payload may have been replaced e.g using [`Self::without_payload`].
     #[inline(always)]
     pub fn layout(&self) -> Layout {
         self.info().layout
     }
-    /// Immediately drops the item that failed to allocate,
-    /// but retain the actual context to display in the error.
-    #[inline(always)]
-    pub fn without_payload(self) -> Error {
-        let Self { payload: _, info } = self;
-        Error { payload: (), info }
-    }
 }
 
 #[cfg(feature = "std")]
-impl<T> From<Error<T>> for std::io::Error {
+impl From<Error> for std::io::Error {
     /// Create an [`OutOfMemory`](std::io::ErrorKind::OutOfMemory) error,
-    /// possibly with an [`Error`] as the [source](std::error::Error::source),
-    /// discarding the [payload](Error::payload).
-    fn from(value: Error<T>) -> Self {
+    /// possibly with an [`Error`] as the [source](std::error::Error::source).
+    fn from(value: Error) -> Self {
         let kind = std::io::ErrorKind::OutOfMemory;
 
         // Creating a new io::Error with a source involves a heap allocation,
         // but we're probably in a memory-constrained scenario,
         // so _try_ and preserve the source,
         // or just use an io::ErrorKind if we can't.
-        match or_drop(value.without_payload()) {
+        match or_drop(value) {
             Ok(source) => {
                 std::io::Error::new(kind, source as Box<dyn std::error::Error + Send + Sync>)
             }
@@ -222,8 +198,8 @@ impl<T> From<Error<T>> for std::io::Error {
 }
 
 #[cfg(feature = "std")]
-impl<T> From<Error<T>> for std::io::ErrorKind {
-    fn from(_: Error<T>) -> Self {
+impl From<Error> for std::io::ErrorKind {
+    fn from(_: Error) -> Self {
         std::io::ErrorKind::OutOfMemory
     }
 }
