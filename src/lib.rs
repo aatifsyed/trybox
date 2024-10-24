@@ -2,18 +2,19 @@
 //!
 //! Basic usage is as follows:
 //! ```
+//! # use try_box::ErrorWith;
 //! match try_box::new(1) {
 //!     Ok(heaped) => {
 //!         let _: Box<i32> = heaped;
 //!     }
-//!     Err(stacked) => {
+//!     Err(ErrorWith(stacked)) => {
 //!         let _: i32 = stacked; // failed object is returned on the stack
 //!     },
 //! }
 //! ```
 //!
 //! You may drop the object after allocation failure instead,
-//! choosing to e.g propogate or wrap the error.
+//! choosing to e.g propogate or wrap the [`Error`].
 //!
 //! ```
 //! fn fallible<T>(x: T) -> Result<Box<T>, Box<dyn std::error::Error + Send + Sync>> {
@@ -67,12 +68,15 @@ use core::{any, fmt, mem::MaybeUninit, ptr::NonNull};
 use number_prefix::NumberPrefix;
 
 /// Attempt to move `x` to a heap allocation,
-/// returning `x` on failure.
+/// returning a wrapped `x` on failure.
 ///
 /// See [crate documentation](mod@self) for more.
 #[inline(always)]
-pub fn new<T>(x: T) -> Result<Box<T>, T> {
-    imp(x)
+pub fn new<T>(x: T) -> Result<Box<T>, ErrorWith<T>> {
+    match imp(x) {
+        Ok(it) => Ok(it),
+        Err(e) => Err(ErrorWith(e)),
+    }
 }
 
 /// Attempt to move `x` to a heap allocation,
@@ -84,7 +88,7 @@ pub fn new<T>(x: T) -> Result<Box<T>, T> {
 pub fn or_drop<T>(x: T) -> Result<Box<T>, Error> {
     match new(x) {
         Ok(it) => Ok(it),
-        Err(_) => Err(Error { info: T::info }),
+        Err(e) => Err(e.without_payload()),
     }
 }
 
@@ -136,24 +140,28 @@ impl fmt::Debug for Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Info { layout, name } = self.info();
-        let (prefix, precision, num) = match NumberPrefix::binary(layout.size() as f64) {
-            NumberPrefix::Standalone(num) => ("", 0, num),
-            NumberPrefix::Prefixed(pre, num) => {
-                #[cfg(feature = "std")]
-                let precision = match num.fract() == 0.0 {
-                    true => 0,
-                    false => 2,
-                };
-                #[cfg(not(feature = "std"))]
-                let precision = 2;
-                (pre.lower(), precision, num)
-            }
-        };
-        f.write_fmt(format_args!(
-            "memory allocation of {num:.precision$} {prefix}bytes (for type {name}) failed",
-        ))
+        write_info(self.info(), f)
     }
+}
+
+fn write_info(info: Info, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let Info { layout, name } = info;
+    let (prefix, precision, num) = match NumberPrefix::binary(layout.size() as f64) {
+        NumberPrefix::Standalone(num) => ("", 0, num),
+        NumberPrefix::Prefixed(pre, num) => {
+            #[cfg(feature = "std")]
+            let precision = match num.fract() == 0.0 {
+                true => 0,
+                false => 2,
+            };
+            #[cfg(not(feature = "std"))]
+            let precision = 2;
+            (pre.lower(), precision, num)
+        }
+    };
+    f.write_fmt(format_args!(
+        "memory allocation of {num:.precision$} {prefix}bytes (for type {name}) failed",
+    ))
 }
 
 impl core::error::Error for Error {}
@@ -219,6 +227,53 @@ impl<T: Sized> Indirect for T {}
 struct Info {
     layout: Layout,
     name: &'static str,
+}
+
+/// Represents the failure to allocate a particular object on the heap,
+/// returned from [`new`].
+#[derive(Debug)]
+pub struct ErrorWith<T>(pub T);
+
+impl<T> ErrorWith<T> {
+    fn info(&self) -> Info {
+        Info {
+            layout: Layout::for_value(&self.0),
+            name: any::type_name_of_val(&self.0),
+        }
+    }
+    pub fn without_payload(self) -> Error {
+        Error { info: T::info }
+    }
+}
+
+impl<T> fmt::Display for ErrorWith<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_info(self.info(), f)
+    }
+}
+
+impl<T: fmt::Debug> core::error::Error for ErrorWith<T> {}
+
+impl<T> From<ErrorWith<T>> for Error {
+    fn from(value: ErrorWith<T>) -> Self {
+        value.without_payload()
+    }
+}
+
+#[cfg(feature = "std")]
+impl<T> From<ErrorWith<T>> for std::io::Error {
+    /// Create an [`OutOfMemory`](std::io::ErrorKind::OutOfMemory) error,
+    /// possibly with an [`Error`] as the [source](std::error::Error::source).
+    fn from(value: ErrorWith<T>) -> Self {
+        Error::from(value).into()
+    }
+}
+
+#[cfg(feature = "std")]
+impl<T> From<ErrorWith<T>> for std::io::ErrorKind {
+    fn from(_: ErrorWith<T>) -> Self {
+        std::io::ErrorKind::OutOfMemory
+    }
 }
 
 #[cfg(test)]
