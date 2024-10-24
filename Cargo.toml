@@ -1,6 +1,6 @@
 [package]
 name = "trybox"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "stable, `no_std`-compatible, fallible heap allocation"
 categories = ["data-structures", "rust-patterns", "no-std", "embedded"]
