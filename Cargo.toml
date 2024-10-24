@@ -2,6 +2,13 @@
 name = "trybox"
 version = "0.1.0"
 edition = "2021"
+description = "stable, `no_std`-compatible, fallible heap allocation"
+categories = ["data-structures", "rust-patterns", "no-std", "embedded"]
+keywords = ["fallible", "allocation"]
+license = "MIT OR Apache-2.0"
+homepage = "https://crates.io/crates/trybox"
+repository = "https://github.com/aatifsyed/trybox"
+documentation = "https://docs.rs/trybox"
 
 [dependencies]
 number_prefix = { version = "0.4.0", default-features = false }
