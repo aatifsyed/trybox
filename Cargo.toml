@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 homepage = "https://crates.io/crates/trybox"
 repository = "https://github.com/aatifsyed/trybox"
 documentation = "https://docs.rs/trybox"
+rust-version = "1.60"
 
 [dependencies]
 number_prefix = { version = "0.4.0", default-features = false }

@@ -114,7 +114,7 @@ fn imp<T>(x: T) -> Result<Box<T>, T> {
                     let mut heap = unsafe { Box::<MaybeUninit<T>>::from_raw(ptr.cast()) };
                     heap.write(x);
                     // SAFETY: we've written an initialized T to the memory.
-                    Ok(unsafe { Box::<MaybeUninit<T>>::assume_init(heap) })
+                    Ok(unsafe { Box::from_raw(Box::into_raw(heap).cast()) })
                 }
             }
         }
@@ -164,7 +164,11 @@ fn write_info(info: Info, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     ))
 }
 
+#[cfg(not(feature = "std"))]
 impl core::error::Error for Error {}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
 
 impl Error {
     #[inline(always)]
@@ -238,7 +242,7 @@ impl<T> ErrorWith<T> {
     fn info(&self) -> Info {
         Info {
             layout: Layout::for_value(&self.0),
-            name: any::type_name_of_val(&self.0),
+            name: any::type_name::<T>(),
         }
     }
     pub fn without_payload(self) -> Error {
@@ -252,7 +256,11 @@ impl<T> fmt::Display for ErrorWith<T> {
     }
 }
 
+#[cfg(not(feature = "std"))]
 impl<T: fmt::Debug> core::error::Error for ErrorWith<T> {}
+
+#[cfg(feature = "std")]
+impl<T: fmt::Debug> std::error::Error for ErrorWith<T> {}
 
 impl<T> From<ErrorWith<T>> for Error {
     fn from(value: ErrorWith<T>) -> Self {
