@@ -65,8 +65,6 @@ use alloc::{
 };
 use core::{any, fmt, mem::MaybeUninit, ptr::NonNull};
 
-use number_prefix::NumberPrefix;
-
 /// Attempt to move `x` to a heap allocation,
 /// returning a wrapped `x` on failure.
 ///
@@ -146,22 +144,52 @@ impl fmt::Display for Error {
 
 fn write_info(info: Info, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let Info { layout, name } = info;
-    let (prefix, precision, num) = match NumberPrefix::binary(layout.size() as f64) {
-        NumberPrefix::Standalone(num) => ("", 0, num),
-        NumberPrefix::Prefixed(pre, num) => {
-            #[cfg(feature = "std")]
-            let precision = match num.fract() == 0.0 {
-                true => 0,
-                false => 2,
-            };
-            #[cfg(not(feature = "std"))]
-            let precision = 2;
-            (pre.lower(), precision, num)
+
+    let mut size = layout.size() as f64;
+    let mut prefix = "";
+    let boundary = 1024.0;
+    for next in [
+        "kibi", "mebi", "gibi", "tebi", "pebi", "exbi", "zebi", "yobi",
+    ] {
+        if size <= boundary {
+            break;
         }
+        size /= boundary;
+        prefix = next;
+    }
+    let precision = match fract(size) == 0.0 {
+        true => 0,
+        false => 2,
     };
     f.write_fmt(format_args!(
-        "memory allocation of {num:.precision$} {prefix}bytes (for type {name}) failed",
+        "memory allocation of {size:.precision$} {prefix}bytes (for type {name}) failed",
     ))
+}
+
+/// `no_std` version of [`f64::fract`]
+const fn fract(x: f64) -> f64 {
+    x - trunc(x)
+}
+
+/// `no_std` version of [`f64::trunc`]
+// https://github.com/rust-lang/libm/blob/754daced79e320c6bc6d2a666a99a60a742c42c4/src/math/trunc.rs#L3-L33
+const fn trunc(x: f64) -> f64 {
+    // let x1p120 = f64::from_bits(0x4770000000000000); // 0x1p120f === 2 ^ 120
+
+    let mut i: u64 = x.to_bits();
+    let e: i64 = (i >> 52 & 0x7ff) as i64 - 0x3ff + 12;
+    let m: u64 = -1i64 as u64 >> e;
+
+    if e >= 52 + 12 {
+        return x;
+    }
+
+    if (i & m) == 0 {
+        return x;
+    }
+    // force_eval!(x + x1p120); // don't care about signalling
+    i &= !m;
+    f64::from_bits(i)
 }
 
 #[cfg(not(feature = "std"))]
